@@ -89,7 +89,7 @@
 
   #debugConsole {
     position: fixed; bottom: 0; right: 0; width: 400px; height: 200px;
-    background: rgba(0,0,0,0.9); color: #0f0; border: 2px solid #0f0;
+    background: rgba(0,0,0,0.95); color: #0f0; border: 2px solid #0f0;
     font-family: monospace; font-size: 11px; overflow-y: auto; padding: 10px;
     z-index: 200; border-radius: 5px 5px 0 0;
     max-height: 30vh;
@@ -97,17 +97,28 @@
 
   .debug-line { 
     padding: 2px 0; 
-    border-bottom: 1px solid #0f0;
+    border-bottom: 1px solid rgba(0,255,0,0.3);
   }
 
   .debug-info { color: #0f0; }
   .debug-warn { color: #ff0; }
   .debug-error { color: #f00; }
+
+  #loadingScreen {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.8);
+    z-index: 150;
+    display: flex; align-items: center; justify-content: center;
+    color: white;
+    font-size: 24px;
+  }
 </style>
 </head>
 <body>
 
-<div id="startScreen">
+<div id="loadingScreen">Chargement... 🎾</div>
+
+<div id="startScreen" style="display:none;">
   <h1>🎾 Tennis 3D</h1>
   <p>Joystick gauche : déplacement</p>
   <p>Glisse ton doigt sur la zone rouge (droite) pour frapper la balle dans la direction souhaitée</p>
@@ -127,569 +138,548 @@
 
 <div id="debugConsole"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script async src="https://cdn.jsdelivr.net/npm/three@r128/build/three.min.js"></script>
 <script>
-// ===================== DEBUG CONSOLE =====================
-const debugConsole = document.getElementById('debugConsole');
-const debugLogs = [];
+let gameReady = false;
 
-function debugLog(message, type = 'info') {
-  const timestamp = new Date().toLocaleTimeString();
-  const log = `[${timestamp}] ${message}`;
-  debugLogs.push({ log, type });
-  
-  if (debugLogs.length > 50) debugLogs.shift();
-  
-  const line = document.createElement('div');
-  line.className = `debug-line debug-${type}`;
-  line.textContent = log;
-  debugConsole.appendChild(line);
-  debugConsole.scrollTop = debugConsole.scrollHeight;
-}
-
-debugLog('🎮 Initialisation du jeu...', 'info');
-
-// ===================== SETUP =====================
-const canvas = document.getElementById('gameCanvas');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.shadowMap.enabled = true;
-
-debugLog('✅ Renderer Three.js initialisé', 'info');
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb);
-scene.fog = new THREE.Fog(0x87ceeb, 30, 80);
-
-const camera = new THREE.PerspectiveCamera(65, window.innerWidth/window.innerHeight, 0.1, 200);
-
-// Court dimensions (mètres, simplifiés)
-const COURT_LENGTH = 24;
-const COURT_WIDTH = 11;
-const HALF_LENGTH = COURT_LENGTH/2;
-const HALF_WIDTH = COURT_WIDTH/2;
-
-// ===================== LUMIÈRES =====================
-const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-scene.add(ambient);
-const sun = new THREE.DirectionalLight(0xffffff, 0.9);
-sun.position.set(10, 20, 10);
-sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
-sun.shadow.camera.left = -20;
-sun.shadow.camera.right = 20;
-sun.shadow.camera.top = 20;
-sun.shadow.camera.bottom = -20;
-scene.add(sun);
-
-debugLog('💡 Lumières ajoutées', 'info');
-
-// ===================== SOL =====================
-const groundGeo = new THREE.PlaneGeometry(200, 200);
-const groundMat = new THREE.MeshStandardMaterial({ color: 0x2d5a3d });
-const ground = new THREE.Mesh(groundGeo, groundMat);
-ground.rotation.x = -Math.PI/2;
-ground.position.y = -0.01;
-ground.receiveShadow = true;
-scene.add(ground);
-
-// ===================== COURT =====================
-const courtGeo = new THREE.PlaneGeometry(COURT_WIDTH, COURT_LENGTH);
-const courtMat = new THREE.MeshStandardMaterial({ color: 0x2266aa });
-const court = new THREE.Mesh(courtGeo, courtMat);
-court.rotation.x = -Math.PI/2;
-court.receiveShadow = true;
-scene.add(court);
-
-debugLog('🏟️ Court de tennis créé (24m x 11m)', 'info');
-
-// Lignes du court
-function createLine(w, h, x, z) {
-  const geo = new THREE.PlaneGeometry(w, h);
-  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  const line = new THREE.Mesh(geo, mat);
-  line.rotation.x = -Math.PI/2;
-  line.position.set(x, 0.01, z);
-  scene.add(line);
-}
-// Lignes de fond
-createLine(COURT_WIDTH, 0.15, 0, HALF_LENGTH);
-createLine(COURT_WIDTH, 0.15, 0, -HALF_LENGTH);
-// Lignes latérales
-createLine(0.15, COURT_LENGTH, HALF_WIDTH, 0);
-createLine(0.15, COURT_LENGTH, -HALF_WIDTH, 0);
-// Ligne de service
-createLine(COURT_WIDTH*0.8, 0.12, 0, 6.4);
-createLine(COURT_WIDTH*0.8, 0.12, 0, -6.4);
-// Ligne centrale de service
-createLine(0.12, 12.8, 0, 0);
-
-// ===================== FILET =====================
-const netGeo = new THREE.PlaneGeometry(COURT_WIDTH + 1.5, 1);
-const netMat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.75, side: THREE.DoubleSide });
-const net = new THREE.Mesh(netGeo, netMat);
-net.position.set(0, 0.5, 0);
-scene.add(net);
-
-const postGeo = new THREE.CylinderGeometry(0.06, 0.06, 1.1, 8);
-const postMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
-const postL = new THREE.Mesh(postGeo, postMat);
-postL.position.set(HALF_WIDTH + 0.7, 0.55, 0);
-scene.add(postL);
-const postR = postL.clone();
-postR.position.x = -(HALF_WIDTH + 0.7);
-scene.add(postR);
-
-debugLog('🥅 Filet et poteaux ajoutés', 'info');
-
-// ===================== JOUEUR =====================
-function createPlayerMesh(color) {
-  const group = new THREE.Group();
-  const bodyGeo = new THREE.CapsuleGeometry(0.35, 1.0, 4, 8);
-  const bodyMat = new THREE.MeshStandardMaterial({ color });
-  const body = new THREE.Mesh(bodyGeo, bodyMat);
-  body.position.y = 0.95;
-  body.castShadow = true;
-  group.add(body);
-
-  const headGeo = new THREE.SphereGeometry(0.25, 12, 12);
-  const headMat = new THREE.MeshStandardMaterial({ color: 0xffd9b3 });
-  const head = new THREE.Mesh(headGeo, headMat);
-  head.position.y = 1.75;
-  head.castShadow = true;
-  group.add(head);
-
-  // Raquette
-  const racketGroup = new THREE.Group();
-  const handleGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.4, 6);
-  const handleMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
-  const handle = new THREE.Mesh(handleGeo, handleMat);
-  handle.position.y = 0.2;
-  racketGroup.add(handle);
-
-  const headRacketGeo = new THREE.TorusGeometry(0.22, 0.03, 8, 16);
-  const headRacketMat = new THREE.MeshStandardMaterial({ color: 0xdddddd });
-  const racketHead = new THREE.Mesh(headRacketGeo, headRacketMat);
-  racketHead.position.y = 0.55;
-  racketGroup.add(racketHead);
-
-  racketGroup.position.set(0.5, 1.0, 0);
-  racketGroup.rotation.z = 0.3;
-  group.add(racketGroup);
-  group.userData.racket = racketGroup;
-
-  return group;
-}
-
-const player = createPlayerMesh(0x2288ff);
-player.position.set(0, 0, HALF_LENGTH - 2);
-scene.add(player);
-
-const opponent = createPlayerMesh(0xff4444);
-opponent.position.set(0, 0, -(HALF_LENGTH - 2));
-opponent.rotation.y = Math.PI;
-scene.add(opponent);
-
-debugLog('👥 Joueur (bleu) et Adversaire (rouge) créés', 'info');
-
-// ===================== BALLE =====================
-const ballGeo = new THREE.SphereGeometry(0.15, 16, 16);
-const ballMat = new THREE.MeshStandardMaterial({ color: 0xccff00, emissive: 0x556600 });
-const ball = new THREE.Mesh(ballGeo, ballMat);
-ball.castShadow = true;
-scene.add(ball);
-
-// Ombre de la balle (aide visuelle)
-const shadowGeo = new THREE.CircleGeometry(0.2, 16);
-const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3 });
-const ballShadow = new THREE.Mesh(shadowGeo, shadowMat);
-ballShadow.rotation.x = -Math.PI/2;
-ballShadow.position.y = 0.02;
-scene.add(ballShadow);
-
-debugLog('🎾 Balle et ombre créées', 'info');
-
-// ===================== CAMERA =====================
-camera.position.set(0, 8, HALF_LENGTH - 1 + 9);
-camera.lookAt(0, 0, 0);
-
-debugLog('📷 Caméra positionnée', 'info');
-
-// ===================== ETAT DU JEU =====================
-let gameState = {
-  ballPos: new THREE.Vector3(0, 3, -HALF_LENGTH + 1),
-  ballVel: new THREE.Vector3(0, 0, 0),
-  serving: true,
-  servingToPlayer: false,
-  playerScore: 0,
-  opponentScore: 0,
-  canPlayerHit: false,
-  canOpponentHit: false,
-  ballInPlayerSide: false,
-  rallyCount: 0,
-  gravity: -9.8,
-  lastBounceSide: null,
-  paused: true
-};
-
-const playerState = {
-  pos: new THREE.Vector3(0, 0, HALF_LENGTH - 2),
-  targetX: 0,
-  speed: 8
-};
-
-function showMessage(text, duration=1500) {
-  const msg = document.getElementById('message');
-  msg.textContent = text;
-  msg.style.opacity = 1;
-  debugLog(text, 'warn');
-  clearTimeout(msg._timeout);
-  msg._timeout = setTimeout(()=> msg.style.opacity = 0, duration);
-}
-
-function updateScoreUI() {
-  document.getElementById('score').textContent = `${gameState.playerScore} - ${gameState.opponentScore}`;
-}
-
-// ===================== SERVICE =====================
-function startServe(toPlayer) {
-  gameState.serving = true;
-  gameState.servingToPlayer = toPlayer;
-  gameState.rallyCount = 0;
-  gameState.lastBounceSide = null;
-
-  if (toPlayer) {
-    // Adversaire sert vers le joueur
-    gameState.ballPos.set(opponent.position.x, 2.5, opponent.position.z);
-    gameState.ballVel.set(
-      (player.position.x - opponent.position.x) * 0.15 + (Math.random()-0.5)*2,
-      2.5,
-      (HALF_LENGTH*2 - 2) / 1.6
-    );
-    debugLog('⚠️ Service de l\'adversaire vers vous', 'warn');
-  } else {
-    // Joueur sert vers l'adversaire
-    gameState.ballPos.set(player.position.x, 2.5, player.position.z);
-    gameState.ballVel.set(0, 1, -3); // Service faible automatique
-    debugLog('🎾 Votre service vers l\'adversaire', 'info');
+// Wait for Three.js to load
+const checkThreeJS = setInterval(() => {
+  if (typeof THREE !== 'undefined' && THREE.Scene) {
+    clearInterval(checkThreeJS);
+    gameReady = true;
+    initGame();
   }
-  
-  // Mettre à jour la position visuelle de la balle
-  ball.position.copy(gameState.ballPos);
-  ballShadow.position.x = gameState.ballPos.x;
-  ballShadow.position.z = gameState.ballPos.z;
-  
-  gameState.serving = false;
-  gameState.paused = false;
-}
+}, 100);
 
-// ===================== JOYSTICK =====================
-const joystickZone = document.getElementById('joystickZone');
-const joystickStick = document.getElementById('joystickStick');
-let joystickActive = false;
-let joystickVector = {x:0, y:0};
-let joystickTouchId = null;
+function initGame() {
+  // ===================== DEBUG CONSOLE =====================
+  const debugConsole = document.getElementById('debugConsole');
+  const debugLogs = [];
 
-function getRelativePos(touch, el) {
-  const rect = el.getBoundingClientRect();
-  return {
-    x: touch.clientX - rect.left - rect.width/2,
-    y: touch.clientY - rect.top - rect.height/2
+  function debugLog(message, type = 'info') {
+    const timestamp = new Date().toLocaleTimeString();
+    const log = `[${timestamp}] ${message}`;
+    debugLogs.push({ log, type });
+    
+    if (debugLogs.length > 50) debugLogs.shift();
+    
+    const line = document.createElement('div');
+    line.className = `debug-line debug-${type}`;
+    line.textContent = log;
+    debugConsole.appendChild(line);
+    debugConsole.scrollTop = debugConsole.scrollHeight;
+  }
+
+  debugLog('🎮 Initialisation du jeu...', 'info');
+
+  // ===================== SETUP =====================
+  const canvas = document.getElementById('gameCanvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+
+  debugLog('✅ Renderer Three.js initialisé', 'info');
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x87ceeb);
+  scene.fog = new THREE.Fog(0x87ceeb, 30, 80);
+
+  const camera = new THREE.PerspectiveCamera(65, window.innerWidth/window.innerHeight, 0.1, 200);
+
+  // Court dimensions
+  const COURT_LENGTH = 24;
+  const COURT_WIDTH = 11;
+  const HALF_LENGTH = COURT_LENGTH/2;
+  const HALF_WIDTH = COURT_WIDTH/2;
+
+  // ===================== LUMIÈRES =====================
+  const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+  scene.add(ambient);
+  const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+  sun.position.set(10, 20, 10);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024, 1024);
+  sun.shadow.camera.left = -20;
+  sun.shadow.camera.right = 20;
+  sun.shadow.camera.top = 20;
+  sun.shadow.camera.bottom = -20;
+  scene.add(sun);
+
+  debugLog('💡 Lumières ajoutées', 'info');
+
+  // ===================== SOL =====================
+  const groundGeo = new THREE.PlaneGeometry(200, 200);
+  const groundMat = new THREE.MeshStandardMaterial({ color: 0x2d5a3d });
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.rotation.x = -Math.PI/2;
+  ground.position.y = -0.01;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // ===================== COURT =====================
+  const courtGeo = new THREE.PlaneGeometry(COURT_WIDTH, COURT_LENGTH);
+  const courtMat = new THREE.MeshStandardMaterial({ color: 0x2266aa });
+  const court = new THREE.Mesh(courtGeo, courtMat);
+  court.rotation.x = -Math.PI/2;
+  court.receiveShadow = true;
+  scene.add(court);
+
+  debugLog('🏟️ Court de tennis créé', 'info');
+
+  // Lignes du court
+  function createLine(w, h, x, z) {
+    const geo = new THREE.PlaneGeometry(w, h);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const line = new THREE.Mesh(geo, mat);
+    line.rotation.x = -Math.PI/2;
+    line.position.set(x, 0.01, z);
+    scene.add(line);
+  }
+  createLine(COURT_WIDTH, 0.15, 0, HALF_LENGTH);
+  createLine(COURT_WIDTH, 0.15, 0, -HALF_LENGTH);
+  createLine(0.15, COURT_LENGTH, HALF_WIDTH, 0);
+  createLine(0.15, COURT_LENGTH, -HALF_WIDTH, 0);
+  createLine(COURT_WIDTH*0.8, 0.12, 0, 6.4);
+  createLine(COURT_WIDTH*0.8, 0.12, 0, -6.4);
+  createLine(0.12, 12.8, 0, 0);
+
+  // ===================== FILET =====================
+  const netGeo = new THREE.PlaneGeometry(COURT_WIDTH + 1.5, 1);
+  const netMat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.75, side: THREE.DoubleSide });
+  const net = new THREE.Mesh(netGeo, netMat);
+  net.position.set(0, 0.5, 0);
+  scene.add(net);
+
+  const postGeo = new THREE.CylinderGeometry(0.06, 0.06, 1.1, 8);
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+  const postL = new THREE.Mesh(postGeo, postMat);
+  postL.position.set(HALF_WIDTH + 0.7, 0.55, 0);
+  scene.add(postL);
+  const postR = postL.clone();
+  postR.position.x = -(HALF_WIDTH + 0.7);
+  scene.add(postR);
+
+  debugLog('🥅 Filet et poteaux ajoutés', 'info');
+
+  // ===================== JOUEUR =====================
+  function createPlayerMesh(color) {
+    const group = new THREE.Group();
+    const bodyGeo = new THREE.CapsuleGeometry(0.35, 1.0, 4, 8);
+    const bodyMat = new THREE.MeshStandardMaterial({ color });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.position.y = 0.95;
+    body.castShadow = true;
+    group.add(body);
+
+    const headGeo = new THREE.SphereGeometry(0.25, 12, 12);
+    const headMat = new THREE.MeshStandardMaterial({ color: 0xffd9b3 });
+    const head = new THREE.Mesh(headGeo, headMat);
+    head.position.y = 1.75;
+    head.castShadow = true;
+    group.add(head);
+
+    const racketGroup = new THREE.Group();
+    const handleGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.4, 6);
+    const handleMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+    const handle = new THREE.Mesh(handleGeo, handleMat);
+    handle.position.y = 0.2;
+    racketGroup.add(handle);
+
+    const headRacketGeo = new THREE.TorusGeometry(0.22, 0.03, 8, 16);
+    const headRacketMat = new THREE.MeshStandardMaterial({ color: 0xdddddd });
+    const racketHead = new THREE.Mesh(headRacketGeo, headRacketMat);
+    racketHead.position.y = 0.55;
+    racketGroup.add(racketHead);
+
+    racketGroup.position.set(0.5, 1.0, 0);
+    racketGroup.rotation.z = 0.3;
+    group.add(racketGroup);
+    group.userData.racket = racketGroup;
+
+    return group;
+  }
+
+  const player = createPlayerMesh(0x2288ff);
+  player.position.set(0, 0, HALF_LENGTH - 2);
+  scene.add(player);
+
+  const opponent = createPlayerMesh(0xff4444);
+  opponent.position.set(0, 0, -(HALF_LENGTH - 2));
+  opponent.rotation.y = Math.PI;
+  scene.add(opponent);
+
+  debugLog('👥 Joueur et Adversaire créés', 'info');
+
+  // ===================== BALLE =====================
+  const ballGeo = new THREE.SphereGeometry(0.15, 16, 16);
+  const ballMat = new THREE.MeshStandardMaterial({ color: 0xccff00, emissive: 0x556600 });
+  const ball = new THREE.Mesh(ballGeo, ballMat);
+  ball.castShadow = true;
+  scene.add(ball);
+
+  const shadowGeo = new THREE.CircleGeometry(0.2, 16);
+  const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3 });
+  const ballShadow = new THREE.Mesh(shadowGeo, shadowMat);
+  ballShadow.rotation.x = -Math.PI/2;
+  ballShadow.position.y = 0.02;
+  scene.add(ballShadow);
+
+  debugLog('🎾 Balle créée', 'info');
+
+  // ===================== CAMERA =====================
+  camera.position.set(0, 8, HALF_LENGTH - 1 + 9);
+  camera.lookAt(0, 0, 0);
+
+  debugLog('📷 Caméra positionnée', 'info');
+
+  // ===================== ETAT DU JEU =====================
+  let gameState = {
+    ballPos: new THREE.Vector3(0, 3, -HALF_LENGTH + 1),
+    ballVel: new THREE.Vector3(0, 0, 0),
+    playerScore: 0,
+    opponentScore: 0,
+    canPlayerHit: false,
+    canOpponentHit: false,
+    gravity: -9.8,
+    lastBounceSide: null,
+    paused: true
   };
-}
 
-joystickZone.addEventListener('touchstart', (e) => {
-  e.preventDefault();
-  const touch = e.changedTouches[0];
-  joystickTouchId = touch.identifier;
-  joystickActive = true;
-  debugLog('🕹️ Joystick activé', 'info');
-}, {passive:false});
+  const playerState = {
+    pos: new THREE.Vector3(0, 0, HALF_LENGTH - 2),
+    speed: 8
+  };
 
-joystickZone.addEventListener('touchmove', (e) => {
-  e.preventDefault();
-  for (let t of e.changedTouches) {
-    if (t.identifier === joystickTouchId) {
-      let pos = getRelativePos(t, joystickZone);
-      const maxDist = 45;
-      let dist = Math.sqrt(pos.x*pos.x + pos.y*pos.y);
-      if (dist > maxDist) {
-        pos.x = pos.x / dist * maxDist;
-        pos.y = pos.y / dist * maxDist;
+  function showMessage(text, duration=1500) {
+    const msg = document.getElementById('message');
+    msg.textContent = text;
+    msg.style.opacity = 1;
+    debugLog(text, 'warn');
+    clearTimeout(msg._timeout);
+    msg._timeout = setTimeout(()=> msg.style.opacity = 0, duration);
+  }
+
+  function updateScoreUI() {
+    document.getElementById('score').textContent = `${gameState.playerScore} - ${gameState.opponentScore}`;
+  }
+
+  // ===================== SERVICE =====================
+  function startServe(toPlayer) {
+    if (toPlayer) {
+      gameState.ballPos.set(opponent.position.x, 2.5, opponent.position.z);
+      gameState.ballVel.set(
+        (player.position.x - opponent.position.x) * 0.15 + (Math.random()-0.5)*2,
+        2.5,
+        (HALF_LENGTH*2 - 2) / 1.6
+      );
+      debugLog('⚠️ Service adversaire', 'warn');
+    } else {
+      gameState.ballPos.set(player.position.x, 2.5, player.position.z);
+      gameState.ballVel.set(0, 1, -3);
+      debugLog('🎾 Votre service', 'info');
+    }
+    
+    ball.position.copy(gameState.ballPos);
+    ballShadow.position.x = gameState.ballPos.x;
+    ballShadow.position.z = gameState.ballPos.z;
+    
+    gameState.paused = false;
+  }
+
+  // ===================== JOYSTICK =====================
+  const joystickZone = document.getElementById('joystickZone');
+  const joystickStick = document.getElementById('joystickStick');
+  let joystickActive = false;
+  let joystickVector = {x:0, y:0};
+  let joystickTouchId = null;
+
+  function getRelativePos(touch, el) {
+    const rect = el.getBoundingClientRect();
+    return {
+      x: touch.clientX - rect.left - rect.width/2,
+      y: touch.clientY - rect.top - rect.height/2
+    };
+  }
+
+  joystickZone.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const touch = e.changedTouches[0];
+    joystickTouchId = touch.identifier;
+    joystickActive = true;
+  }, {passive:false});
+
+  joystickZone.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    for (let t of e.changedTouches) {
+      if (t.identifier === joystickTouchId) {
+        let pos = getRelativePos(t, joystickZone);
+        const maxDist = 45;
+        let dist = Math.sqrt(pos.x*pos.x + pos.y*pos.y);
+        if (dist > maxDist) {
+          pos.x = pos.x / dist * maxDist;
+          pos.y = pos.y / dist * maxDist;
+        }
+        joystickStick.style.left = `calc(50% + ${pos.x}px)`;
+        joystickStick.style.top = `calc(50% + ${pos.y}px)`;
+        joystickVector.x = pos.x / maxDist;
+        joystickVector.y = pos.y / maxDist;
       }
-      joystickStick.style.left = `calc(50% + ${pos.x}px)`;
-      joystickStick.style.top = `calc(50% + ${pos.y}px)`;
-      joystickVector.x = pos.x / maxDist;
-      joystickVector.y = pos.y / maxDist;
     }
-  }
-}, {passive:false});
+  }, {passive:false});
 
-function resetJoystick(e) {
-  for (let t of e.changedTouches) {
-    if (t.identifier === joystickTouchId) {
-      joystickActive = false;
-      joystickTouchId = null;
-      joystickVector = {x:0, y:0};
-      joystickStick.style.left = '50%';
-      joystickStick.style.top = '50%';
-      debugLog('🕹️ Joystick désactivé', 'info');
-    }
-  }
-}
-joystickZone.addEventListener('touchend', resetJoystick);
-joystickZone.addEventListener('touchcancel', resetJoystick);
-
-// ===================== SWING (FRAPPE) =====================
-const swingZone = document.getElementById('swingZone');
-let swingTouchId = null;
-let swingStart = null;
-let swingCurrent = null;
-
-swingZone.addEventListener('touchstart', (e) => {
-  e.preventDefault();
-  const touch = e.changedTouches[0];
-  swingTouchId = touch.identifier;
-  swingStart = {x: touch.clientX, y: touch.clientY};
-  swingCurrent = {...swingStart};
-  debugLog('👆 Geste de frappe détecté (début)', 'info');
-}, {passive:false});
-
-swingZone.addEventListener('touchmove', (e) => {
-  e.preventDefault();
-  for (let t of e.changedTouches) {
-    if (t.identifier === swingTouchId) {
-      swingCurrent = {x: t.clientX, y: t.clientY};
-    }
-  }
-}, {passive:false});
-
-function handleSwingEnd(e) {
-  for (let t of e.changedTouches) {
-    if (t.identifier === swingTouchId) {
-      if (swingStart && swingCurrent && gameState.canPlayerHit) {
-        const dx = swingCurrent.x - swingStart.x;
-        const dy = swingCurrent.y - swingStart.y;
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        debugLog(`👆 Frappe: distance=${dist.toFixed(0)}px`, 'warn');
-        performPlayerHit(dx, dy);
-      } else if (!gameState.canPlayerHit) {
-        debugLog('❌ Vous ne pouvez pas frapper maintenant', 'error');
+  function resetJoystick(e) {
+    for (let t of e.changedTouches) {
+      if (t.identifier === joystickTouchId) {
+        joystickActive = false;
+        joystickTouchId = null;
+        joystickVector = {x:0, y:0};
+        joystickStick.style.left = '50%';
+        joystickStick.style.top = '50%';
       }
-      swingTouchId = null;
-      swingStart = null;
-      swingCurrent = null;
     }
   }
-}
-swingZone.addEventListener('touchend', handleSwingEnd);
-swingZone.addEventListener('touchcancel', handleSwingEnd);
+  joystickZone.addEventListener('touchend', resetJoystick);
+  joystickZone.addEventListener('touchcancel', resetJoystick);
 
-// ===================== FRAPPE JOUEUR =====================
-function performPlayerHit(dx, dy) {
-  gameState.canPlayerHit = false;
+  // ===================== SWING =====================
+  const swingZone = document.getElementById('swingZone');
+  let swingTouchId = null;
+  let swingStart = null;
+  let swingCurrent = null;
 
-  const power = Math.min(Math.sqrt(dx*dx + dy*dy) / 60, 3);
-  const minPower = 1.2;
-  const finalPower = Math.max(power, minPower);
+  swingZone.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const touch = e.changedTouches[0];
+    swingTouchId = touch.identifier;
+    swingStart = {x: touch.clientX, y: touch.clientY};
+    swingCurrent = {...swingStart};
+  }, {passive:false});
 
-  const lateralAim = THREE.MathUtils.clamp(dx / 100, -1, 1);
-  const liftAim = THREE.MathUtils.clamp(-dy / 100, -0.3, 1);
+  swingZone.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    for (let t of e.changedTouches) {
+      if (t.identifier === swingTouchId) {
+        swingCurrent = {x: t.clientX, y: t.clientY};
+      }
+    }
+  }, {passive:false});
 
-  const targetX = lateralAim * HALF_WIDTH * 0.9;
-  const distanceZ = COURT_LENGTH - 3;
-
-  gameState.ballVel.set(
-    (targetX - ball.position.x) * 0.12,
-    3 + liftAim * 2.5,
-    -distanceZ / (1.4 / finalPower)
-  );
-
-  gameState.ballPos.copy(ball.position);
-  gameState.lastBounceSide = 'player';
-  showMessage(finalPower > 2 ? "💥 Coup puissant !" : "🎾 Frappe", 800);
-
-  animateSwing(player);
-}
-
-function animateSwing(who) {
-  const racket = who.userData.racket;
-  if (!racket) return;
-  racket.rotation.z = -0.8;
-  setTimeout(()=> racket.rotation.z = 0.3, 150);
-}
-
-// ===================== IA ADVERSAIRE =====================
-function updateOpponentAI(dt) {
-  if (gameState.ballVel.z > 0) {
-    const targetX = THREE.MathUtils.clamp(gameState.ballPos.x, -HALF_WIDTH+0.5, HALF_WIDTH-0.5);
-    const dx = targetX - opponent.position.x;
-    opponent.position.x += THREE.MathUtils.clamp(dx, -5*dt, 5*dt);
+  function handleSwingEnd(e) {
+    for (let t of e.changedTouches) {
+      if (t.identifier === swingTouchId) {
+        if (swingStart && swingCurrent && gameState.canPlayerHit) {
+          const dx = swingCurrent.x - swingStart.x;
+          const dy = swingCurrent.y - swingStart.y;
+          performPlayerHit(dx, dy);
+        }
+        swingTouchId = null;
+        swingStart = null;
+        swingCurrent = null;
+      }
+    }
   }
+  swingZone.addEventListener('touchend', handleSwingEnd);
+  swingZone.addEventListener('touchcancel', handleSwingEnd);
 
-  if (gameState.canOpponentHit) {
-    gameState.canOpponentHit = false;
-    animateSwing(opponent);
-
-    const targetX = (Math.random()-0.5) * HALF_WIDTH * 1.6;
-    const power = 1 + Math.random()*1.5;
+  // ===================== FRAPPE =====================
+  function performPlayerHit(dx, dy) {
+    gameState.canPlayerHit = false;
+    const power = Math.min(Math.sqrt(dx*dx + dy*dy) / 60, 3);
+    const finalPower = Math.max(power, 1.2);
+    const lateralAim = THREE.MathUtils.clamp(dx / 100, -1, 1);
+    const liftAim = THREE.MathUtils.clamp(-dy / 100, -0.3, 1);
+    const targetX = lateralAim * HALF_WIDTH * 0.9;
     const distanceZ = COURT_LENGTH - 3;
 
     gameState.ballVel.set(
-      (targetX - ball.position.x) * 0.1,
-      2.5 + Math.random()*1.5,
-      distanceZ / (1.4 / power)
+      (targetX - ball.position.x) * 0.12,
+      3 + liftAim * 2.5,
+      -distanceZ / (1.4 / finalPower)
     );
-    gameState.lastBounceSide = 'opponent';
-    debugLog('🤖 L\'adversaire frappe!', 'info');
+
+    gameState.ballPos.copy(ball.position);
+    gameState.lastBounceSide = 'player';
+    showMessage(finalPower > 2 ? "💥 Coup puissant !" : "🎾 Frappe", 800);
+    animateSwing(player);
   }
-}
 
-// ===================== PHYSIQUE BALLE =====================
-function updateBallPhysics(dt) {
-  if (gameState.paused) return;
+  function animateSwing(who) {
+    const racket = who.userData.racket;
+    if (!racket) return;
+    racket.rotation.z = -0.8;
+    setTimeout(()=> racket.rotation.z = 0.3, 150);
+  }
 
-  gameState.ballVel.y += gameState.gravity * dt;
-  gameState.ballPos.addScaledVector(gameState.ballVel, dt);
+  // ===================== IA =====================
+  function updateOpponentAI(dt) {
+    if (gameState.ballVel.z > 0) {
+      const targetX = THREE.MathUtils.clamp(gameState.ballPos.x, -HALF_WIDTH+0.5, HALF_WIDTH-0.5);
+      const dx = targetX - opponent.position.x;
+      opponent.position.x += THREE.MathUtils.clamp(dx, -5*dt, 5*dt);
+    }
 
-  // Rebond sol
-  if (gameState.ballPos.y <= 0.15) {
-    gameState.ballPos.y = 0.15;
+    if (gameState.canOpponentHit) {
+      gameState.canOpponentHit = false;
+      animateSwing(opponent);
+      const targetX = (Math.random()-0.5) * HALF_WIDTH * 1.6;
+      const power = 1 + Math.random()*1.5;
+      const distanceZ = COURT_LENGTH - 3;
 
-    const bounceZ = gameState.ballPos.z;
-    const bounceX = gameState.ballPos.x;
-    const inCourtX = Math.abs(bounceX) <= HALF_WIDTH;
-    const inCourtZ = Math.abs(bounceZ) <= HALF_LENGTH;
+      gameState.ballVel.set(
+        (targetX - ball.position.x) * 0.1,
+        2.5 + Math.random()*1.5,
+        distanceZ / (1.4 / power)
+      );
+      gameState.lastBounceSide = 'opponent';
+      debugLog('🤖 Frappe adversaire', 'info');
+    }
+  }
 
-    if (!inCourtX || !inCourtZ) {
-      handlePoint(gameState.lastBounceSide === 'player' ? 'opponent' : 'player', "Faute !");
+  // ===================== PHYSIQUE =====================
+  function updateBallPhysics(dt) {
+    if (gameState.paused) return;
+
+    gameState.ballVel.y += gameState.gravity * dt;
+    gameState.ballPos.addScaledVector(gameState.ballVel, dt);
+
+    if (gameState.ballPos.y <= 0.15) {
+      gameState.ballPos.y = 0.15;
+      const bounceZ = gameState.ballPos.z;
+      const bounceX = gameState.ballPos.x;
+      const inCourtX = Math.abs(bounceX) <= HALF_WIDTH;
+      const inCourtZ = Math.abs(bounceZ) <= HALF_LENGTH;
+
+      if (!inCourtX || !inCourtZ) {
+        handlePoint(gameState.lastBounceSide === 'player' ? 'opponent' : 'player', "Faute !");
+        return;
+      }
+
+      gameState.ballVel.y *= -0.72;
+
+      if (bounceZ > 0) {
+        gameState.canPlayerHit = true;
+        debugLog('⚡ À vous!', 'warn');
+      } else {
+        gameState.canOpponentHit = true;
+      }
+
+      if (gameState.ballVel.y < 1) gameState.ballVel.y = 2;
+    }
+
+    if (Math.abs(gameState.ballPos.z) < 0.3 && gameState.ballPos.y < 1.0) {
+      handlePoint(gameState.lastBounceSide === 'player' ? 'opponent' : 'player', "Filet !");
       return;
     }
 
-    gameState.ballVel.y *= -0.72;
-    gameState.rallyCount++;
+    if (Math.abs(gameState.ballPos.z) > HALF_LENGTH + 5 || gameState.ballPos.y < -5) {
+      handlePoint(gameState.lastBounceSide === 'player' ? 'opponent' : 'player', "Sortie !");
+      return;
+    }
 
-    if (bounceZ > 0) {
-      gameState.canPlayerHit = true;
-      gameState.ballInPlayerSide = true;
-      debugLog('⚡ À vous de frapper!', 'warn');
+    ball.position.copy(gameState.ballPos);
+    ballShadow.position.x = gameState.ballPos.x;
+    ballShadow.position.z = gameState.ballPos.z;
+    const scale = Math.max(0.3, 1 - gameState.ballPos.y/10);
+    ballShadow.scale.set(scale, scale, scale);
+  }
+
+  function handlePoint(winner, reason) {
+    gameState.paused = true;
+    if (winner === 'player') {
+      gameState.playerScore++;
+      showMessage(`✅ Point !`, 1800);
+      debugLog(`📊 ${gameState.playerScore} - ${gameState.opponentScore}`, 'info');
     } else {
-      gameState.canOpponentHit = true;
-      gameState.ballInPlayerSide = false;
+      gameState.opponentScore++;
+      showMessage(`❌ ${reason}`, 1800);
+      debugLog(`📊 ${gameState.playerScore} - ${gameState.opponentScore}`, 'error');
+    }
+    updateScoreUI();
+
+    if (gameState.playerScore >= 4 || gameState.opponentScore >= 4) {
+      setTimeout(() => endGame(winner), 1000);
+      return;
     }
 
-    if (gameState.ballVel.y < 1) {
-      gameState.ballVel.y = 2;
+    setTimeout(() => {
+      startServe(winner !== 'player');
+    }, 1600);
+  }
+
+  function endGame(winner) {
+    showMessage(winner === 'player' ? "🏆 VICTOIRE !" : "😔 DÉFAITE", 5000);
+    document.getElementById('restartBtn').style.display = 'block';
+    gameState.paused = true;
+  }
+
+  // ===================== DÉPLACEMENT =====================
+  function updatePlayerMovement(dt) {
+    if (joystickActive) {
+      playerState.pos.x += joystickVector.x * playerState.speed * dt;
+      playerState.pos.z += joystickVector.y * playerState.speed * dt * 0.5;
     }
+    playerState.pos.x = THREE.MathUtils.clamp(playerState.pos.x, -HALF_WIDTH-1, HALF_WIDTH+1);
+    playerState.pos.z = THREE.MathUtils.clamp(playerState.pos.z, 2, HALF_LENGTH + 3);
+
+    player.position.x += (playerState.pos.x - player.position.x) * Math.min(dt*10,1);
+    player.position.z += (playerState.pos.z - player.position.z) * Math.min(dt*10,1);
   }
 
-  if (Math.abs(gameState.ballPos.z) < 0.3 && gameState.ballPos.y < 1.0) {
-    handlePoint(gameState.lastBounceSide === 'player' ? 'opponent' : 'player', "Filet !");
-    return;
-  }
+  // ===================== BOUCLE PRINCIPALE =====================
+  let lastTime = performance.now();
 
-  if (Math.abs(gameState.ballPos.z) > HALF_LENGTH + 5 || gameState.ballPos.y < -5) {
-    handlePoint(gameState.lastBounceSide === 'player' ? 'opponent' : 'player', "Sortie !");
-    return;
-  }
+  function animate() {
+    requestAnimationFrame(animate);
+    const now = performance.now();
+    const dt = Math.min((now - lastTime) / 1000, 0.05);
+    lastTime = now;
 
-  ball.position.copy(gameState.ballPos);
-  ballShadow.position.x = gameState.ballPos.x;
-  ballShadow.position.z = gameState.ballPos.z;
-  const scale = Math.max(0.3, 1 - gameState.ballPos.y/10);
-  ballShadow.scale.set(scale, scale, scale);
+    updatePlayerMovement(dt);
+    updateOpponentAI(dt);
+    updateBallPhysics(dt);
+
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  debugLog('🎬 Jeu lancé!', 'info');
+
+  // ===================== EVENTS =====================
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  document.getElementById('startBtn').addEventListener('click', () => {
+    document.getElementById('loadingScreen').style.display = 'none';
+    document.getElementById('startScreen').style.display = 'none';
+    debugLog('🎮 JEU DÉMARRÉ!', 'warn');
+    startServe(false);
+  });
+
+  document.getElementById('restartBtn').addEventListener('click', () => {
+    gameState.playerScore = 0;
+    gameState.opponentScore = 0;
+    updateScoreUI();
+    document.getElementById('restartBtn').style.display = 'none';
+    debugLog('🔄 RÉINITIALISÉ', 'info');
+    startServe(true);
+  });
+
+  // Show start screen
+  document.getElementById('loadingScreen').style.display = 'none';
+  document.getElementById('startScreen').style.display = 'flex';
+  debugLog('✅ Prêt à jouer!', 'warn');
 }
 
-function handlePoint(winner, reason) {
-  gameState.paused = true;
-  if (winner === 'player') {
-    gameState.playerScore++;
-    showMessage(`✅ Point ! (${reason})`, 1800);
-    debugLog(`📊 Score: Vous ${gameState.playerScore} - ${gameState.opponentScore} Adversaire`, 'info');
-  } else {
-    gameState.opponentScore++;
-    showMessage(`❌ ${reason}`, 1800);
-    debugLog(`📊 Score: Vous ${gameState.playerScore} - ${gameState.opponentScore} Adversaire`, 'error');
+// Timeout de 5 secondes
+setTimeout(() => {
+  if (!gameReady) {
+    document.getElementById('loadingScreen').innerHTML = '❌ Erreur de chargement Three.js<br>Veuillez rafraîchir la page';
   }
-  updateScoreUI();
-
-  if (gameState.playerScore >= 4 || gameState.opponentScore >= 4) {
-    setTimeout(() => endGame(winner), 1000);
-    return;
-  }
-
-  setTimeout(() => {
-    startServe(winner !== 'player');
-  }, 1600);
-}
-
-function endGame(winner) {
-  showMessage(winner === 'player' ? "🏆 VICTOIRE !" : "😔 DÉFAITE", 5000);
-  document.getElementById('restartBtn').style.display = 'block';
-  gameState.paused = true;
-  debugLog(winner === 'player' ? '🏆 VICTOIRE!' : '😔 DÉFAITE', winner === 'player' ? 'info' : 'error');
-}
-
-// ===================== DEPLACEMENT JOUEUR =====================
-function updatePlayerMovement(dt) {
-  if (joystickActive) {
-    playerState.pos.x += joystickVector.x * playerState.speed * dt;
-    playerState.pos.z += joystickVector.y * playerState.speed * dt * 0.5;
-  }
-  playerState.pos.x = THREE.MathUtils.clamp(playerState.pos.x, -HALF_WIDTH-1, HALF_WIDTH+1);
-  playerState.pos.z = THREE.MathUtils.clamp(playerState.pos.z, 2, HALF_LENGTH + 3);
-
-  player.position.x += (playerState.pos.x - player.position.x) * Math.min(dt*10,1);
-  player.position.z += (playerState.pos.z - player.position.z) * Math.min(dt*10,1);
-}
-
-// ===================== BOUCLE PRINCIPALE =====================
-let lastTime = performance.now();
-let frameCount = 0;
-
-function animate() {
-  requestAnimationFrame(animate);
-  const now = performance.now();
-  const dt = Math.min((now - lastTime) / 1000, 0.05);
-  lastTime = now;
-  frameCount++;
-
-  updatePlayerMovement(dt);
-  updateOpponentAI(dt);
-  updateBallPhysics(dt);
-
-  renderer.render(scene, camera);
-}
-animate();
-
-debugLog('🎬 Boucle d\'animation démarrée', 'info');
-
-// ===================== RESIZE =====================
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
-
-// ===================== DEMARRAGE =====================
-document.getElementById('startBtn').addEventListener('click', () => {
-  debugLog('🎮 JEU DÉMARRÉ!', 'warn');
-  document.getElementById('startScreen').style.display = 'none';
-  startServe(false);
-});
-
-document.getElementById('restartBtn').addEventListener('click', () => {
-  gameState.playerScore = 0;
-  gameState.opponentScore = 0;
-  updateScoreUI();
-  document.getElementById('restartBtn').style.display = 'none';
-  debugLog('🔄 JEU RÉINITIALISÉ', 'info');
-  startServe(true);
-});
-
-debugLog('✅ Tous les event listeners attachés', 'info');
-debugLog('Cliquez sur JOUER pour commencer!', 'warn');
+}, 5000);
 </script>
 </body>
 </html>
